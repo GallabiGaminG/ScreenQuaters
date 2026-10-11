@@ -21,6 +21,7 @@ internal sealed class Options
 {
     public bool SnapOnDrag { get; set; } = false;
     public bool BrowserFullscreen { get; set; } = true;
+    public Dictionary<string, LayoutPreset> MonitorLayouts { get; set; } = new();
     public string ExcludedProcesses { get; set; } = "bandicam,obs64,steam,explorer";
 }
 
@@ -221,27 +222,188 @@ internal sealed class QuarterContext : ApplicationContext
     void ReleaseAll() { foreach (var hwnd in windows.Keys.ToArray()) Release(hwnd); }
     void Settings()
     {
-        using var form = new Form { Text = "ScreenQuarters — Settings", ClientSize = new Size(570, 290), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, AutoScaleMode = AutoScaleMode.Dpi };
-        var drag = new CheckBox { Text = "Sürükleyip bırakınca otomatik bölgeye yerleştir (tüm uygun pencereler)", Checked = options.SnapOnDrag, Location = new Point(20,20), AutoSize = true };
-        var browser = new CheckBox { Text = "Tarayıcı F11 / video tam ekranını bölgede tut (deneysel)", Checked = options.BrowserFullscreen, Location = new Point(20,55), AutoSize = true };
-        var label = new Label { Text = "Hariç tutulan işlem adları (.exe olmadan, virgülle ayır):", Location = new Point(20,95), AutoSize = true };
-        var exclude = new TextBox { Text = options.ExcludedProcesses, Location = new Point(20,120), Width = 525 };
-        var note = new Label { Text = "Oyunları otomatik sürükleme için hariç tut. Tek ekran: Ctrl+Alt+F12.\nAyarlar yerelde saklanır. Windows başlangıcına otomatik eklenmez.", Location = new Point(20,160), Size = new Size(530,55) };
-        var save = new Button { Text = "Kaydet", Location = new Point(435,235), Width = 110 };
+        using var form = new Form
+        {
+            Text = "ScreenQuarters — Settings",
+            ClientSize = new Size(620, 440),
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            AutoScaleMode = AutoScaleMode.Dpi
+        };
+
+        var drag = new CheckBox
+        {
+            Text = "Sürükleyip bırakınca otomatik bölgeye yerleştir",
+            Checked = options.SnapOnDrag,
+            Location = new Point(20, 20),
+            AutoSize = true
+        };
+
+        var browser = new CheckBox
+        {
+            Text = "Tarayıcı tam ekranını bölgede tut (deneysel)",
+            Checked = options.BrowserFullscreen,
+            Location = new Point(20, 55),
+            AutoSize = true
+        };
+
+        var excludeLabel = new Label
+        {
+            Text = "Hariç tutulan işlem adları (.exe olmadan, virgülle ayır):",
+            Location = new Point(20, 95),
+            AutoSize = true
+        };
+
+        var exclude = new TextBox
+        {
+            Text = options.ExcludedProcesses,
+            Location = new Point(20, 120),
+            Width = 575
+        };
+
+        var monitorLabel = new Label
+        {
+            Text = "Monitör:",
+            Location = new Point(20, 165),
+            AutoSize = true
+        };
+
+        var monitorBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(20, 190),
+            Width = 575
+        };
+
+        var presetLabel = new Label
+        {
+            Text = "Bu monitörün düzeni:",
+            Location = new Point(20, 235),
+            AutoSize = true
+        };
+
+        var presetBox = new ComboBox
+        {
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            Location = new Point(20, 260),
+            Width = 575
+        };
+
+        var screens = Screen.AllScreens;
+        var presets = Enum.GetValues<LayoutPreset>();
+
+        // Formdaki değişiklikler yalnızca Kaydet'e basınca uygulanır.
+        var layouts = new Dictionary<string, LayoutPreset>(
+            options.MonitorLayouts ?? new());
+
+        foreach (var screen in screens)
+        {
+            string primary = screen.Primary ? " — Ana ekran" : "";
+
+            monitorBox.Items.Add(
+                $"{screen.DeviceName} — " +
+                $"{screen.Bounds.Width} × {screen.Bounds.Height}" +
+                primary);
+        }
+
+        foreach (var preset in presets)
+            presetBox.Items.Add(LayoutPresets.GetName(preset));
+
+        bool loadingPreset = false;
+
+        monitorBox.SelectedIndexChanged += (_, _) =>
+        {
+            int index = monitorBox.SelectedIndex;
+            if (index < 0) return;
+
+            string device = screens[index].DeviceName;
+
+            var selected = layouts.TryGetValue(device, out var saved)
+                ? saved
+                : LayoutPreset.Grid2x2;
+
+            int presetIndex = Array.IndexOf(presets, selected);
+
+            loadingPreset = true;
+            presetBox.SelectedIndex = presetIndex >= 0 ? presetIndex : 0;
+            loadingPreset = false;
+        };
+
+        presetBox.SelectedIndexChanged += (_, _) =>
+        {
+            if (loadingPreset ||
+                monitorBox.SelectedIndex < 0 ||
+                presetBox.SelectedIndex < 0)
+                return;
+
+            string device = screens[monitorBox.SelectedIndex].DeviceName;
+            layouts[device] = presets[presetBox.SelectedIndex];
+        };
+
+        var note = new Label
+        {
+            Text = "Her monitöre ayrı düzen seçebilirsin.\n" +
+                   "Tek ekran modu: Ctrl+Alt+F12.",
+            Location = new Point(20, 310),
+            Size = new Size(575, 55)
+        };
+
+        var save = new Button
+        {
+            Text = "Kaydet",
+            Location = new Point(485, 390),
+            Width = 110
+        };
+
         save.Click += (_, _) =>
         {
-            var next = new Options { SnapOnDrag = drag.Checked, BrowserFullscreen = browser.Checked, ExcludedProcesses = exclude.Text };
+            var next = new Options
+            {
+                SnapOnDrag = drag.Checked,
+                BrowserFullscreen = browser.Checked,
+                ExcludedProcesses = exclude.Text,
+                MonitorLayouts = layouts
+            };
+
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(optionsPath)!);
-                File.WriteAllText(optionsPath + ".tmp", JsonSerializer.Serialize(next, new JsonSerializerOptions { WriteIndented = true }), Encoding.UTF8);
+                Directory.CreateDirectory(
+                    Path.GetDirectoryName(optionsPath)!);
+
+                File.WriteAllText(
+                    optionsPath + ".tmp",
+                    JsonSerializer.Serialize(
+                        next,
+                        new JsonSerializerOptions { WriteIndented = true }),
+                    Encoding.UTF8);
+
                 File.Move(optionsPath + ".tmp", optionsPath, true);
-                ReleaseAll(); options = next; form.Close();
+
+                ReleaseAll();
+                options = next;
+                form.Close();
             }
-            catch (Exception ex) { MessageBox.Show("Ayarlar kaydedilemedi: " + ex.Message); }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Ayarlar kaydedilemedi: " + ex.Message);
+            }
         };
-        form.Controls.AddRange(new Control[] { drag, browser, label, exclude, note, save });
-        form.AcceptButton = save; form.ShowDialog();
+
+        form.Controls.AddRange(new Control[]
+        {
+        drag, browser, excludeLabel, exclude,
+        monitorLabel, monitorBox, presetLabel, presetBox,
+        note, save
+        });
+
+        form.AcceptButton = save;
+
+        if (screens.Length > 0)
+            monitorBox.SelectedIndex = 0;
+
+        form.ShowDialog();
     }
     protected override void ExitThreadCore()
     {
