@@ -1,71 +1,103 @@
-# ScreenQuarters 0.1.0
+# ScreenQuarters
 
-4K ekranı veya Windows'a tek ekran olarak görünen NVIDIA Surround yüzeyini dört pencere bölgesine ayıran, sistem tepsisinde çalışan deneysel Windows aracı. .NET 8 / Windows Forms / Win32. Ana pencere yok; Settings, About ve Exit tepsi menüsündedir.
+[English](README.md) | [Türkçe](README.tr.md)
 
-## Hemen çalıştır
+A lightweight Windows system tray tool for arranging windows into monitor-specific zones and keeping supported browser fullscreen content inside a selected zone.
 
-1. ZIP'i bir klasöre çıkar.
-2. Visual Studio 2022'de `ScreenQuarters.sln` aç. “.NET masaüstü geliştirme” iş yükü ve .NET 8 SDK gerekli; .NET 8 için VS 2022 17.8 veya sonrası.
-3. F5'e bas. Görev çubuğunun sağındaki sistem tepsisinde ikonu bul (gizli ikonlar okunun altında olabilir).
-4. Tarayıcıya geç, Ctrl+Alt+2 ile sağ üste yerleştir. Ardından F11 veya videonun tam ekran düğmesini dene.
-5. Soldaki Visual Studio / Adobe penceresini Ctrl+Alt+1 veya 3 ile yerleştir.
-6. Film / oyun öncesi Ctrl+Alt+F12: bölge yönetimi durur ve pencereler bırakılır. Artık uygulamanın kendi tam ekranını kullan. Tekrar F12 ile çalışma moduna geç; bölge atamalarını yeniden yap.
+Built by **GallabiGaminG**, with AI-assisted development, to make everyday desktop work more comfortable: write code in one zone, watch a video in another, and switch back to full-monitor use when needed.
 
-## Kısayollar
+## Features
 
-| Kısayol | İşlev |
+- Choose a separate layout for each connected monitor.
+- Five presets: 2×2, 3×3, two columns, three columns, and a wide left zone with two stacked right zones.
+- Numbered layout previews in Settings.
+- Move the active window with Ctrl+Alt+1–9.
+- Optional automatic placement when dragging and dropping windows.
+- Experimental browser F11 / video fullscreen containment.
+- Release one window or switch off zone management for movies and games.
+- Local settings, process exclusions, and a tray menu with Settings, About, and Exit.
+
+The application UI is currently Turkish. An English UI is not implemented yet.
+
+## Quick start
+
+Requires Windows 10/11, Visual Studio 2022 17.8 or later with the **.NET desktop development** workload, and the .NET 8 SDK.
+
+1. Clone or download this repository and open `ScreenQuarters.sln`.
+2. Press **F5**. Find ScreenQuarters in the system tray, including the hidden icons area.
+3. Right-click the icon → **Settings**. Select the monitor, choose a layout, and click **Kaydet** (Save).
+4. Focus an application window on that monitor and press **Ctrl+Alt+1–9** to place it in a zone.
+5. For a browser, assign the zone first, then try F11 or the video's fullscreen button.
+
+Selecting a layout does not draw permanent lines on the desktop or fill empty zones. Unused space continues to show the desktop wallpaper.
+
+## Shortcuts
+
+| Shortcut | Action |
 |---|---|
-| Ctrl+Alt+1 | Sol üst |
-| Ctrl+Alt+2 | Sağ üst |
-| Ctrl+Alt+3 | Sol alt |
-| Ctrl+Alt+4 | Sağ alt |
-| Ctrl+Alt+0 | Aktif pencereyi bölge yönetiminden çıkar |
-| Ctrl+Alt+F12 | Çalışma / tek ekran modu |
+| Ctrl+Alt+1–9 | Place the active window in the corresponding zone on its current monitor |
+| Ctrl+Alt+0 | Release the active window from zone management |
+| Ctrl+Alt+F12 | Toggle workspace / full-monitor mode |
 
-Kısayollar üst sıradaki rakam tuşlarını kullanır; numpad değil. Çakışan kısayollar açılışta bildirilir. v0.1'de kısayol düzenleme yok.
+Use the number row, not the numpad. Only numbers present in the chosen layout are valid; unavailable zones show a notification. Shortcut conflicts are reported at startup. Custom shortcut editing is not implemented.
 
-## Davranış ve sınırlar
+Grid zones are numbered left to right, top to bottom. The wide-left preset uses **1 = left**, **2 = upper right**, **3 = lower right**. The Settings preview shows the exact mapping.
 
-- Normal pencereler bölgeye boyutlandırılır; atanmış pencereyi büyütmek yeniden bölgesine yerleştirir.
-- Tarayıcı tam ekran desteği deneyseldir: atanan Chrome, Edge, Firefox, Brave, Opera ve Vivaldi pencerelerindeki başlıksız tam ekran boyut değişimini yaklaşık 200 ms aralıkla düzeltir. Tarayıcı sürümüne ve video oynatıcıya bağlıdır. Ayrı bir tam ekran HWND oluşturan oynatıcılar desteklenmez. İlk geçişte kısa bir ekran büyümesi görülebilir.
-- Pencere 2,5 saniyede dört defadan fazla yeniden düzeltme gerektirirse yönetim bırakılır ve bildirim gösterilir; tarayıcı ile sürekli mücadele etmez.
-- Bu bir gerçek monitör / sanal ekran sürücüsü değildir. Uygulamalar ve Windows hâlâ fiziksel / Surround ekranı görür. Exclusive fullscreen oyunları bölgeye kilitlemez. DirectX / Vulkan tespiti yapmaz, süreç içine kod enjekte etmez.
-- Varsayılan otomatik sürükleme kapalıdır. Settings'ten açarsan uygun boyutlandırılabilir pencereler bırakıldıkları noktadaki çeyreğe yerleşir. Oyunlarının işlem adlarını hariç tutma listesine ekle veya oyun öncesi tek ekran moduna geç.
-- Atanmış bir pencereyi başka bölgeye sürüklemek atamayı günceller. Pencereyi serbest kullanmak için Ctrl+Alt+0.
-- Windows'un yerleşik Snap özelliği aynı anda etkin olabilir; sonuç çakışırsa Windows > Sistem > Çoklu görev > Pencereleri tuttur ayarını incele. Araç bu ayarı değiştirmez.
-- Bölgeler ekranın görev çubuğu hariç çalışma alanına göre hesaplanır. 3840×2160 ekran, görev çubuğu gizliyse 1920×1080 dört bölge verir; görev çubuğu görünürse yükseklik biraz azalır. Surround tek yüzey olarak dörde bölünür; fiziksel panel sınırları esas alınmaz.
-- Karma DPI, negatif ekran koordinatları ve tek sayılı çözünürlükler dikkate alınır. Bazı uygulamaların minimum pencere boyutu bölgeden büyük olabilir.
-- Çıkış / bırakma işleminde normal pencerenin ilk konumu geri yüklenir; tarayıcı hâlâ tam ekrandaysa ekranın tümüne genişletilir. F11'in uygulama içi durumunu değiştirmez. Fullscreen kapalı ayarı yalnızca izlemeyi kapatır.
-- Yönetici olarak çalışan uygulamalar standart yetkili bu araçtan gelen boyutlandırmayı reddedebilir. Araç admin talep etmez.
-- Ayarlar `%LOCALAPPDATA%\ScreenQuarters\settings.json` içinde UTF-8 JSON olarak saklanır. Başlangıç kaydı, servis, sürücü, telemetri veya ağ erişimi yok. Windows başlangıcında çalıştırmak istersen yayımlanmış EXE'nin kısayolunu `shell:startup` klasörüne kendin ekleyebilirsin.
+Full-monitor mode releases managed windows. Enter fullscreen using the application's own controls. Switching back enables zone management; assign windows again.
 
-## EXE üretme
+## Settings and exclusions
 
-Visual Studio'da Release derle veya .NET 8 SDK kurulu PowerShell'de:
+Enable **Sürükleyip bırakınca otomatik bölgeye yerleştir** for automatic drag placement. Assigned windows can also be dragged to another zone.
+
+The exclusion field accepts comma-separated **process names without `.exe`**. For example, `explorer` excludes File Explorer; remove it if you want to arrange Explorer windows. Exclusions apply to the process owning the window, not every component of an application. A helper process may therefore need its own entry.
+
+Settings are saved as UTF-8 JSON at:
+
+```text
+%LOCALAPPDATA%\ScreenQuarters\settings.json
+```
+
+Changing source-code defaults does not overwrite an existing saved configuration.
+
+## Fullscreen support and limitations
+
+This is an early prototype using .NET 8, Windows Forms, and Win32 window positioning.
+
+- Browser fullscreen containment is experimental. Recognized processes include Chrome, Edge, Firefox, Brave, Opera, and Vivaldi. Support depends on browser and player behavior; a separate fullscreen window is not automatically managed.
+- A brief resize may be visible when entering fullscreen. If a window repeatedly rejects its zone size, the tool releases it and displays a notification.
+- The tool does not create virtual monitors, change display drivers, detect DirectX/Vulkan, or contain exclusive fullscreen games. Switch off zone management before gaming.
+- NVIDIA Surround is treated as the single display surface exposed by Windows. Physical panel boundaries are not used. Surround-specific behavior has not been separately verified.
+- Zones use each monitor's working area, excluding the taskbar. Application minimum sizes may prevent an exact fit.
+- Elevated applications may reject positioning from the normally running tool. The application does not request administrator privileges.
+- Windows Snap can interact with drag placement. The tool does not change Windows Snap settings.
+- Screen identifiers can change after display reconfiguration; check saved layouts after reconnecting monitors.
+- There is no background service, telemetry, or automatic startup registration. To start with Windows, optionally place a shortcut to the published executable in `shell:startup`.
+
+## Build a standalone executable
+
+From the repository root, with the .NET 8 SDK installed:
 
 ```powershell
 .\Publish.ps1
 ```
 
-`publish\ScreenQuarters.exe` .NET runtime gerektirmeyen win-x64 tek dosya çıktısı olur. İlk yayınlama SDK'nın gerekli paketleri indirmesini gerektirebilir. Proje kaynak olarak teslim edilmiştir; önceden derlenmiş EXE içermez.
+Output: `publish\ScreenQuarters.exe` — a self-contained Windows x64 build. Publishing may download required SDK packages.
 
-## İlk Windows denemesi
+## Validation
 
-1. Notepad ve Visual Studio'yu farklı bölgelere yerleştir; büyüt düğmesini dene.
-2. Edge / Chrome: sağ üst bölge, F11 aç-kapat, video tam ekran aç-kapat. Diğer pencereleri kullanırken videonun bölgede kalmasını kontrol et.
-3. Ctrl+Alt+0 ile tarayıcıyı serbest bırak; F11 ve normal pencere geri dönüşünü dene.
-4. Ctrl+Alt+F12 ile tek ekran; ardından oyunu kendi tam ekran modunda aç.
-5. Sürükleme seçeneğini aç; farklı bölgeler ve fiziksel monitörler arasında dene.
-6. %100 / %150 ölçeklendirme, Surround, uyku dönüşü ve monitör çıkarma senaryolarını kontrol et.
-7. Tepsi > Exit sonrası pencerelerin serbest kaldığını ve ikinci açılışın tek örnek olduğunu doğrula.
+Manually built and tested by the project owner on Windows: zone shortcuts, quarter-screen browser/video fullscreen, per-monitor setting persistence, and 3×3 placement on two monitors. A numbered layout preview was also demonstrated.
 
-## Doğrulama durumu
+Compatibility across all browsers, applications, DPI combinations, monitor reconnection scenarios, and exclusive fullscreen games is not established.
 
-Kaynak / proje dosyaları hazırlanmıştır. Üretim ortamında Windows ve .NET SDK bulunmadığından build ve gerçek HWND / F11 / Surround davranışları çalıştırılarak doğrulanmamıştır. Yukarıdaki deneme özellikle tarayıcı uyumluluğu için gereklidir.
+## Planned improvements
 
-## Teknik başvuru
+- Resize zone boundaries with the mouse and save custom layouts.
+- Friendly monitor model names where available.
+- Select a window to create an exclusion rule.
+- Clear feedback for excluded applications and refreshed About/help text.
 
-- https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowpos
-- https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-monitorinfo
-- https://learn.microsoft.com/en-us/windows/win32/gdi/positioning-objects-on-multiple-display-monitors
-- https://learn.microsoft.com/en-us/windows/win32/hidpi/dpi-awareness-context
+These are planned features, not current capabilities.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
