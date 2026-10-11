@@ -67,11 +67,22 @@ internal sealed class QuarterContext : ApplicationContext
         tray.DoubleClick += (_, _) => Settings();
         receiver.Pressed += Hotkey;
         var failures = new List<string>();
-        for (int id = 1; id <= 6; id++)
+        for (int id = 1; id <= 11; id++)
         {
-            uint key = id <= 4 ? (uint)('0' + id) : id == 5 ? 0x30u : 0x7Bu;
-            if (Native.RegisterHotKey(receiver.Handle, id, 0x4003, key)) registered.Add(id);
-            else failures.Add(id <= 4 ? $"Ctrl+Alt+{id}" : id == 5 ? "Ctrl+Alt+0" : "Ctrl+Alt+F12");
+            uint key = id <= 9
+                ? (uint)('0' + id)
+                : id == 10 ? 0x30u : 0x7Bu;
+
+            if (Native.RegisterHotKey(receiver.Handle, id, 0x4003, key))
+            {
+                registered.Add(id);
+            }
+            else
+            {
+                failures.Add(id <= 9
+                    ? $"Ctrl+Alt+{id}"
+                    : id == 10 ? "Ctrl+Alt+0" : "Ctrl+Alt+F12");
+            }
         }
         eventProc = OnMoveEvent; // Keep delegate alive for the entire hook lifetime.
         hook = Native.SetWinEventHook(0xA, 0xB, 0, eventProc, 0, 0, 2);
@@ -85,10 +96,26 @@ internal sealed class QuarterContext : ApplicationContext
     void Notify(string text) => tray.ShowBalloonTip(4000, "ScreenQuarters", text, ToolTipIcon.Info);
     void Hotkey(int id)
     {
-        if (id == 6) { ToggleMode(); return; }
+        if (id == 11)
+        {
+            ToggleMode();
+            return;
+        }
+
         nint hwnd = Native.GetForegroundWindow();
-        if (id == 5) { Release(hwnd); return; }
-        if (!working) { Notify("Tek ekran modu açık. Ctrl+Alt+F12 ile çalışma moduna geç."); return; }
+
+        if (id == 10)
+        {
+            Release(hwnd);
+            return;
+        }
+
+        if (!working)
+        {
+            Notify("Tek ekran modu açık. Ctrl+Alt+F12 ile çalışma moduna geç.");
+            return;
+        }
+
         Assign(hwnd, id - 1);
     }
     void ToggleMode()
@@ -116,20 +143,100 @@ internal sealed class QuarterContext : ApplicationContext
         }
         catch { return false; }
     }
-    void Assign(nint hwnd, int zone, nint destinationMonitor = default)
+    Native.Rect[] GetZones(nint monitorHandle)
     {
-        if (!Eligible(hwnd, out uint pid, out bool browser)) return;
+        var monitor = Native.MonitorInfo(monitorHandle);
+
+        if (monitor is null)
+            return Array.Empty<Native.Rect>();
+
+        string? deviceName =
+            Native.GetMonitorDeviceName(monitorHandle);
+
+        var preset = LayoutPreset.Grid2x2;
+
+        if (deviceName is not null &&
+            options.MonitorLayouts is not null)
+        {
+            foreach (var entry in options.MonitorLayouts)
+            {
+                if (string.Equals(
+                        entry.Key,
+                        deviceName,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    Enum.IsDefined(typeof(LayoutPreset), entry.Value))
+                {
+                    preset = entry.Value;
+                    break;
+                }
+            }
+        }
+
+        return LayoutPresets.GetZones(monitor.Value.Work, preset);
+    }
+
+    bool TryGetTarget(ManagedWindow state, out Native.Rect target)
+    {
+        var zones = GetZones(state.Monitor);
+
+        if (state.Zone < 0 || state.Zone >= zones.Length)
+        {
+            target = default;
+            return false;
+        }
+
+        target = zones[state.Zone];
+        return true;
+    }
+    void Assign(
+    nint hwnd,
+    int zone,
+    nint destinationMonitor = default)
+    {
+        if (!Eligible(hwnd, out uint pid, out bool browser))
+            return;
+
+        nint monitor = destinationMonitor != 0
+            ? destinationMonitor
+            : Native.MonitorFromWindow(hwnd, 2);
+
+        var zones = GetZones(monitor);
+
+        if (zone < 0 || zone >= zones.Length)
+        {
+            Notify($"Bu ekranın düzeninde {zones.Length} bölge var.");
+            return;
+        }
+
         if (!windows.TryGetValue(hwnd, out var state))
         {
             var original = Native.Placement.Create();
-            if (!Native.GetWindowPlacement(hwnd, ref original)) { Notify("Pencerenin mevcut konumu okunamadı."); return; }
-            state = new ManagedWindow { Original = original, ProcessId = pid, Browser = browser };
+
+            if (!Native.GetWindowPlacement(hwnd, ref original))
+            {
+                Notify("Pencerenin mevcut konumu okunamadı.");
+                return;
+            }
+
+            state = new ManagedWindow
+            {
+                Original = original,
+                ProcessId = pid,
+                Browser = browser
+            };
+
             windows.Add(hwnd, state);
         }
+
         state.Zone = zone;
-        state.Monitor = destinationMonitor != 0 ? destinationMonitor : Native.MonitorFromWindow(hwnd, 2);
+        state.Monitor = monitor;
         state.Corrections.Clear();
-        if (!Place(hwnd, state)) { windows.Remove(hwnd); Notify("Pencere taşınamadı. Yönetici olarak çalışan veya boyutlandırmayı reddeden bir uygulama olabilir."); }
+
+        if (!Place(hwnd, state))
+        {
+            Release(hwnd);
+            Notify("Pencere taşınamadı. Uygulama boyutlandırmayı reddediyor olabilir.");
+        }
     }
     static bool Alive(nint hwnd, ManagedWindow state)
     {
@@ -145,7 +252,8 @@ internal sealed class QuarterContext : ApplicationContext
     {
         var monitor = Native.MonitorInfo(state.Monitor);
         if (monitor is null) return false;
-        var target = Geometry.Zone(monitor.Value.Work, state.Zone);
+        if (!TryGetTarget(state, out var target))
+            return false;
         mutating = true;
         try
         {
@@ -172,7 +280,11 @@ internal sealed class QuarterContext : ApplicationContext
             if (Fullscreen(hwnd, state))
             {
                 Native.GetWindowRect(hwnd, out var rect);
-                var target = Geometry.Zone(monitor.Value.Work, state.Zone);
+                if (!TryGetTarget(state, out var target))
+                {
+                    Release(hwnd);
+                    continue;
+                }
                 needs |= Math.Abs(rect.Left - target.Left) > 12 || Math.Abs(rect.Top - target.Top) > 12 || Math.Abs(rect.Right - target.Right) > 12 || Math.Abs(rect.Bottom - target.Bottom) > 12;
             }
             if (!needs) continue;
@@ -188,21 +300,52 @@ internal sealed class QuarterContext : ApplicationContext
             if (!Place(hwnd, state)) { Release(hwnd); Notify("Pencere bölgeye taşınamadığı için bırakıldı."); }
         }
     }
-    void OnMoveEvent(nint hookHandle, uint evt, nint hwnd, int objectId, int childId, uint thread, uint time)
+    void OnMoveEvent(
+        nint hookHandle,
+        uint evt,
+        nint hwnd,
+        int objectId,
+        int childId,
+        uint thread,
+        uint time)
     {
-        if (closing || mutating || hwnd == 0 || objectId != 0) return;
-        if (evt == 0xA) { moving = hwnd; return; }
+        if (closing || mutating || hwnd == 0 || objectId != 0)
+            return;
+
+        if (evt == 0xA)
+        {
+            moving = hwnd;
+            return;
+        }
+
         moving = 0;
-        if (!working || (!options.SnapOnDrag && !windows.ContainsKey(hwnd))) return;
-        if ((Native.Style(hwnd) & 0x00040000L) == 0) return;
-        // Cursor identifies the destination even if the dragged window spans multiple zones.
-        if (!Native.GetCursorPos(out var cursor)) return;
+
+        if (!working ||
+            (!options.SnapOnDrag && !windows.ContainsKey(hwnd)))
+            return;
+
+        if ((Native.Style(hwnd) & 0x00040000L) == 0)
+            return;
+
+        if (!Native.GetCursorPos(out var cursor))
+            return;
+
         nint destination = Native.MonitorFromPoint(cursor, 2);
-        var monitor = Native.MonitorInfo(destination);
-        if (monitor is null) return;
-        var work = monitor.Value.Work;
-        int zone = (cursor.X >= work.Left + (work.Right - work.Left) / 2 ? 1 : 0) + (cursor.Y >= work.Top + (work.Bottom - work.Top) / 2 ? 2 : 0);
-        Assign(hwnd, zone, destination);
+        var zones = GetZones(destination);
+
+        for (int zone = 0; zone < zones.Length; zone++)
+        {
+            var rect = zones[zone];
+
+            if (cursor.X >= rect.Left &&
+                cursor.X < rect.Right &&
+                cursor.Y >= rect.Top &&
+                cursor.Y < rect.Bottom)
+            {
+                Assign(hwnd, zone, destination);
+                return;
+            }
+        }
     }
     void Release(nint hwnd)
     {
