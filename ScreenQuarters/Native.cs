@@ -45,4 +45,37 @@ internal static class Native
     [DllImport("user32.dll")] public static extern nint SetWinEventHook(uint min, uint max, nint module, WinEventProc callback, uint processId, uint threadId, uint flags);
     [DllImport("user32.dll")] public static extern bool UnhookWinEvent(nint hook);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(nint hwnd, uint attribute, out Rect value, int size);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct MonitorInfoEx
+    {
+        public int Size;
+        public Rect Bounds;
+        public Rect Work;
+        public uint Flags;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+    }
+
+    [DllImport(
+        "user32.dll",
+        EntryPoint = "GetMonitorInfoW",
+        CharSet = CharSet.Unicode,
+        ExactSpelling = true)]
+    static extern bool GetMonitorInfoEx(
+        nint monitor,
+        ref MonitorInfoEx info);
+
+    public static string? GetMonitorDeviceName(nint monitor)
+    {
+        var info = new MonitorInfoEx
+        {
+            Size = Marshal.SizeOf<MonitorInfoEx>(),
+            DeviceName = ""
+        };
+
+        return GetMonitorInfoEx(monitor, ref info)
+            ? info.DeviceName
+            : null;
+    }
 }
