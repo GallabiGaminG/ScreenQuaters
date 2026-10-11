@@ -22,7 +22,7 @@ internal sealed class Options
     public bool SnapOnDrag { get; set; } = false;
     public bool BrowserFullscreen { get; set; } = true;
     public Dictionary<string, LayoutPreset> MonitorLayouts { get; set; } = new();
-    public string ExcludedProcesses { get; set; } = "bandicam,obs64,steam,explorer";
+    public string ExcludedProcesses { get; set; } = "bandicam,obs64,explorer";
 }
 
 internal sealed class ManagedWindow
@@ -368,7 +368,7 @@ internal sealed class QuarterContext : ApplicationContext
         using var form = new Form
         {
             Text = "ScreenQuarters — Settings",
-            ClientSize = new Size(620, 440),
+            ClientSize = new Size(620, 650),
             StartPosition = FormStartPosition.CenterScreen,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
@@ -441,18 +441,25 @@ internal sealed class QuarterContext : ApplicationContext
         var layouts = new Dictionary<string, LayoutPreset>(
             options.MonitorLayouts ?? new());
 
-        foreach (var screen in screens)
+        for (int index = 0; index < screens.Length; index++)
         {
+            var screen = screens[index];
             string primary = screen.Primary ? " — Ana ekran" : "";
 
             monitorBox.Items.Add(
-                $"{screen.DeviceName} — " +
+                $"Ekran {index + 1} — " +
                 $"{screen.Bounds.Width} × {screen.Bounds.Height}" +
                 primary);
         }
 
         foreach (var preset in presets)
             presetBox.Items.Add(LayoutPresets.GetName(preset));
+
+        var preview = new LayoutPreview
+        {
+            Location = new Point(20, 310),
+            Size = new Size(575, 235)
+        };
 
         bool loadingPreset = false;
 
@@ -472,6 +479,10 @@ internal sealed class QuarterContext : ApplicationContext
             loadingPreset = true;
             presetBox.SelectedIndex = presetIndex >= 0 ? presetIndex : 0;
             loadingPreset = false;
+            preview.SetLayout(
+    presets[presetBox.SelectedIndex],
+    screens[index].WorkingArea.Width,
+    screens[index].WorkingArea.Height);
         };
 
         presetBox.SelectedIndexChanged += (_, _) =>
@@ -483,20 +494,26 @@ internal sealed class QuarterContext : ApplicationContext
 
             string device = screens[monitorBox.SelectedIndex].DeviceName;
             layouts[device] = presets[presetBox.SelectedIndex];
+            var screen = screens[monitorBox.SelectedIndex];
+
+            preview.SetLayout(
+                presets[presetBox.SelectedIndex],
+                screen.WorkingArea.Width,
+                screen.WorkingArea.Height);
         };
 
         var note = new Label
         {
-            Text = "Her monitöre ayrı düzen seçebilirsin.\n" +
-                   "Tek ekran modu: Ctrl+Alt+F12.",
-            Location = new Point(20, 310),
+            Text = "Önizlemedeki numaralar: Ctrl+Alt+1–9.\n" +
+       "Tek ekran modu: Ctrl+Alt+F12.",
+            Location = new Point(20, 560),
             Size = new Size(575, 55)
         };
 
         var save = new Button
         {
             Text = "Kaydet",
-            Location = new Point(485, 390),
+            Location = new Point(485, 605),
             Width = 110
         };
 
@@ -538,7 +555,7 @@ internal sealed class QuarterContext : ApplicationContext
         {
         drag, browser, excludeLabel, exclude,
         monitorLabel, monitorBox, presetLabel, presetBox,
-        note, save
+        preview, note, save
         });
 
         form.AcceptButton = save;
