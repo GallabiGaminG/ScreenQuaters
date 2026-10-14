@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -9,6 +9,7 @@ namespace ScreenQuarters;
 internal sealed class LayoutPreview : Control
 {
     private LayoutPreset preset = LayoutPreset.Grid2x2;
+    private int[]? customRows;
     private int screenWidth = 3840;
     private int screenHeight = 2160;
 
@@ -20,9 +21,10 @@ internal sealed class LayoutPreview : Control
         ForeColor = Color.White;
     }
 
-    public void SetLayout(LayoutPreset selected, int width, int height)
+    public void SetLayout(LayoutPreset selected, int width, int height, int[]? rows = null)
     {
         preset = selected;
+        customRows = LayoutPresets.NormalizeRows(rows);
         screenWidth = Math.Max(1, width);
         screenHeight = Math.Max(1, height);
         Invalidate();
@@ -57,7 +59,7 @@ internal sealed class LayoutPreview : Control
             Bottom = screenHeight
         };
 
-        var zones = LayoutPresets.GetZones(area, preset);
+        var zones = LayoutPresets.GetZones(area, preset, customRows);
 
         using var fill = new SolidBrush(Color.FromArgb(48, 65, 90));
         using var border = new Pen(Color.FromArgb(130, 170, 225));

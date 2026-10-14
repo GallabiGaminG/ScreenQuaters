@@ -22,6 +22,8 @@ internal sealed class Options
     public bool SnapOnDrag { get; set; } = false;
     public bool BrowserFullscreen { get; set; } = true;
     public Dictionary<string, LayoutPreset> MonitorLayouts { get; set; } = new();
+    public Dictionary<string, int[]> MonitorCustomRows { get; set; } = new();
+    public Dictionary<string, bool> MonitorEnabled { get; set; } = new();
     public string ExcludedProcesses { get; set; } = "bandicam,obs64,explorer";
 }
 
@@ -32,6 +34,7 @@ internal sealed class ManagedWindow
     public Native.Placement Original;
     public nint Monitor;
     public bool Browser;
+    public bool NeedsPlacement;
     public Queue<long> Corrections = new();
 }
 
@@ -61,7 +64,7 @@ internal sealed class QuarterContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Settings / Ayarlar", null, (_, _) => Settings());
         menu.Items.Add("About / Hakkında", null, (_, _) => MessageBox.Show(
-            "ScreenQuarters 0.1.0 — Windows 10/11\n\nCtrl+Alt+1: Sol üst\nCtrl+Alt+2: Sağ üst\nCtrl+Alt+3: Sol alt\nCtrl+Alt+4: Sağ alt\nCtrl+Alt+0: Aktif pencereyi bırak\nCtrl+Alt+F12: Çalışma / tek ekran\n\nTarayıcıda önce bölgeye yerleştir, ardından F11 veya video tam ekranını aç.\nTarayıcı desteği deneyseldir. Gerçek sanal monitör oluşturmaz.\n\nYönetici yetkisi, sürücü ve ağ bağlantısı kullanmaz.", "About / Hakkında"));
+            "ScreenQuarters 0.1.0 — Windows 10/11\n\nCtrl+Alt+1–9: Seçili düzenin bölgesine yerleştir\nCtrl+Alt+0: Aktif pencereyi bırak\nCtrl+Alt+F12: Çalışma / tek ekran\n\nSettings içinden her ekranın bölge yönetimini ayrı açıp kapatabilirsin.\nTarayıcıda önce bölgeye yerleştir, ardından F11 veya video tam ekranını aç.\nTarayıcı desteği deneyseldir. Gerçek sanal monitör oluşturmaz.\n\nYönetici yetkisi, sürücü ve ağ bağlantısı kullanmaz.", "About / Hakkında"));
         menu.Items.Add("Exit / Çıkış", null, (_, _) => ExitThread());
         tray = new NotifyIcon { Icon = SystemIcons.Application, Text = "ScreenQuarters 0.1.0 — Çalışma", ContextMenuStrip = menu, Visible = true };
         tray.DoubleClick += (_, _) => Settings();
@@ -89,7 +92,7 @@ internal sealed class QuarterContext : ApplicationContext
         timer.Tick += (_, _) => Tick();
         timer.Start();
         if (failures.Count > 0) Notify("Kısayol başka uygulamada kullanılıyor: " + string.Join(", ", failures));
-        else Notify("Hazır. Aktif pencere için Ctrl+Alt+1–4. Tek ekran: Ctrl+Alt+F12.");
+        else Notify("Hazır. Aktif pencere için Ctrl+Alt+1–9. Tek ekran: Ctrl+Alt+F12.");
         if (hook == 0) Notify("Sürükleme takibi başlatılamadı. Bölge kısayollarını kullanabilirsin.");
     }
 
@@ -143,36 +146,92 @@ internal sealed class QuarterContext : ApplicationContext
         }
         catch { return false; }
     }
+    bool IsMonitorEnabled(nint monitorHandle)
+    {
+        string? device = Native.GetMonitorDeviceName(monitorHandle);
+        if (device is null) return false;
+
+        if (options.MonitorEnabled is not null)
+        {
+            foreach (var entry in options.MonitorEnabled)
+                if (string.Equals(entry.Key, device, StringComparison.OrdinalIgnoreCase))
+                    return entry.Value;
+        }
+
+        // Preserve existing behavior when upgrading an older settings file.
+        return true;
+    }
+
+    static LayoutPreset GetPreset(nint monitorHandle, Options source)
+    {
+        string? device = Native.GetMonitorDeviceName(monitorHandle);
+        if (device is not null && source.MonitorLayouts is not null)
+        {
+            foreach (var entry in source.MonitorLayouts)
+                if (string.Equals(entry.Key, device, StringComparison.OrdinalIgnoreCase) &&
+                    Enum.IsDefined(typeof(LayoutPreset), entry.Value))
+                    return entry.Value;
+        }
+        return LayoutPreset.Grid2x2;
+    }
+
+    static int[] GetCustomRows(nint monitorHandle, Options source)
+    {
+        string? device = Native.GetMonitorDeviceName(monitorHandle);
+        if (device is not null && source.MonitorCustomRows is not null)
+        {
+            foreach (var entry in source.MonitorCustomRows)
+                if (string.Equals(entry.Key, device, StringComparison.OrdinalIgnoreCase))
+                    return LayoutPresets.NormalizeRows(entry.Value);
+        }
+        return LayoutPresets.NormalizeRows(null);
+    }
+
     Native.Rect[] GetZones(nint monitorHandle)
     {
         var monitor = Native.MonitorInfo(monitorHandle);
+        if (monitor is null) return Array.Empty<Native.Rect>();
+        return LayoutPresets.GetZones(monitor.Value.Work,
+            GetPreset(monitorHandle, options), GetCustomRows(monitorHandle, options));
+    }
 
-        if (monitor is null)
-            return Array.Empty<Native.Rect>();
+    void ApplyOptions(Options next)
+    {
+        var previous = options;
+        options = next;
 
-        string? deviceName =
-            Native.GetMonitorDeviceName(monitorHandle);
-
-        var preset = LayoutPreset.Grid2x2;
-
-        if (deviceName is not null &&
-            options.MonitorLayouts is not null)
+        foreach (var pair in windows.ToArray())
         {
-            foreach (var entry in options.MonitorLayouts)
+            nint hwnd = pair.Key;
+            var state = pair.Value;
+            if (!Alive(hwnd, state)) { windows.Remove(hwnd); continue; }
+
+            nint current = Native.MonitorFromWindow(hwnd, 2);
+            if (current != state.Monitor || !IsMonitorEnabled(current) ||
+                !Eligible(hwnd, out _, out _))
             {
-                if (string.Equals(
-                        entry.Key,
-                        deviceName,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    Enum.IsDefined(typeof(LayoutPreset), entry.Value))
+                // Stop managing without restoring or moving the window.
+                windows.Remove(hwnd);
+                continue;
+            }
+
+            bool layoutChanged = GetPreset(current, previous) != GetPreset(current, next);
+            bool customChanged = GetPreset(current, next) == LayoutPreset.CustomColumns &&
+                !GetCustomRows(current, previous).SequenceEqual(GetCustomRows(current, next));
+            if (layoutChanged || customChanged)
+            {
+                var zones = GetZones(current);
+                if (state.Zone >= zones.Length)
+                    windows.Remove(hwnd);
+                else
                 {
-                    preset = entry.Value;
-                    break;
+                    state.Corrections.Clear();
+                    state.NeedsPlacement = true;
                 }
             }
         }
 
-        return LayoutPresets.GetZones(monitor.Value.Work, preset);
+        Tick();
     }
 
     bool TryGetTarget(ManagedWindow state, out Native.Rect target)
@@ -199,6 +258,13 @@ internal sealed class QuarterContext : ApplicationContext
         nint monitor = destinationMonitor != 0
             ? destinationMonitor
             : Native.MonitorFromWindow(hwnd, 2);
+
+        if (!IsMonitorEnabled(monitor))
+        {
+            windows.Remove(hwnd);
+            Notify("Bu ekranda bölge yönetimi kapalı. Settings'ten açabilirsin.");
+            return;
+        }
 
         var zones = GetZones(monitor);
 
@@ -273,10 +339,17 @@ internal sealed class QuarterContext : ApplicationContext
         {
             var hwnd = pair.Key; var state = pair.Value;
             if (!Alive(hwnd, state)) { windows.Remove(hwnd); continue; }
-            if (moving == hwnd || Native.IsIconic(hwnd) || !Native.IsWindowVisible(hwnd)) continue;
+            if (moving == hwnd) continue;
+            nint current = Native.MonitorFromWindow(hwnd, 2);
+            if (current != state.Monitor || !IsMonitorEnabled(current))
+            {
+                windows.Remove(hwnd);
+                continue;
+            }
+            if (Native.IsIconic(hwnd) || !Native.IsWindowVisible(hwnd)) continue;
             var monitor = Native.MonitorInfo(state.Monitor);
             if (monitor is null) { Release(hwnd); continue; }
-            bool needs = Native.IsZoomed(hwnd);
+            bool needs = state.NeedsPlacement || Native.IsZoomed(hwnd);
             if (Fullscreen(hwnd, state))
             {
                 Native.GetWindowRect(hwnd, out var rect);
@@ -297,6 +370,7 @@ internal sealed class QuarterContext : ApplicationContext
                 continue;
             }
             state.Corrections.Enqueue(now);
+            state.NeedsPlacement = false;
             if (!Place(hwnd, state)) { Release(hwnd); Notify("Pencere bölgeye taşınamadığı için bırakıldı."); }
         }
     }
@@ -331,6 +405,11 @@ internal sealed class QuarterContext : ApplicationContext
             return;
 
         nint destination = Native.MonitorFromPoint(cursor, 2);
+        if (!IsMonitorEnabled(destination))
+        {
+            windows.Remove(hwnd);
+            return;
+        }
         var zones = GetZones(destination);
 
         for (int zone = 0; zone < zones.Length; zone++)
@@ -368,7 +447,7 @@ internal sealed class QuarterContext : ApplicationContext
         using var form = new Form
         {
             Text = "ScreenQuarters — Settings",
-            ClientSize = new Size(620, 650),
+            ClientSize = new Size(620, 690),
             StartPosition = FormStartPosition.CenterScreen,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false,
@@ -423,15 +502,22 @@ internal sealed class QuarterContext : ApplicationContext
         var presetLabel = new Label
         {
             Text = "Bu monitörün düzeni:",
-            Location = new Point(20, 235),
+            Location = new Point(20, 265),
             AutoSize = true
         };
 
         var presetBox = new ComboBox
         {
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Location = new Point(20, 260),
+            Location = new Point(20, 290),
             Width = 575
+        };
+
+        var manageMonitor = new CheckBox
+        {
+            Text = "Bu ekranda bölge yönetimini etkinleştir",
+            Location = new Point(20, 230),
+            AutoSize = true
         };
 
         var screens = Screen.AllScreens;
@@ -439,7 +525,14 @@ internal sealed class QuarterContext : ApplicationContext
 
         // Formdaki değişiklikler yalnızca Kaydet'e basınca uygulanır.
         var layouts = new Dictionary<string, LayoutPreset>(
-            options.MonitorLayouts ?? new());
+            options.MonitorLayouts ?? new(), StringComparer.OrdinalIgnoreCase);
+        var enabled = new Dictionary<string, bool>(
+            options.MonitorEnabled ?? new(), StringComparer.OrdinalIgnoreCase);
+
+        var customRows = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
+        if (options.MonitorCustomRows is not null)
+            foreach (var entry in options.MonitorCustomRows)
+                customRows[entry.Key] = LayoutPresets.NormalizeRows(entry.Value);
 
         for (int index = 0; index < screens.Length; index++)
         {
@@ -457,63 +550,127 @@ internal sealed class QuarterContext : ApplicationContext
 
         var preview = new LayoutPreview
         {
-            Location = new Point(20, 310),
-            Size = new Size(575, 235)
+            Location = new Point(20, 410),
+            Size = new Size(575, 165)
         };
 
+        var customPanel = new Panel
+        {
+            Location = new Point(20, 330),
+            Size = new Size(575, 70),
+            Visible = false
+        };
+        var columnCount = new NumericUpDown
+        {
+            Minimum = 1, Maximum = 3, Value = 3,
+            Location = new Point(0, 25), Width = 65
+        };
+        customPanel.Controls.Add(new Label
+        {
+            Text = "Sütun sayısı", Location = new Point(0, 0), AutoSize = true
+        });
+        customPanel.Controls.Add(columnCount);
+        var rowCounts = new NumericUpDown[3];
+        var rowLabels = new Label[3];
+        for (int column = 0; column < 3; column++)
+        {
+            int x = 125 + column * 140;
+            rowLabels[column] = new Label
+            {
+                Text = $"Sütun {column + 1}: Satır", Location = new Point(x, 0), AutoSize = true
+            };
+            rowCounts[column] = new NumericUpDown
+            {
+                Minimum = 1, Maximum = 3, Value = 1,
+                Location = new Point(x, 25), Width = 65
+            };
+            customPanel.Controls.Add(rowLabels[column]);
+            customPanel.Controls.Add(rowCounts[column]);
+        }
+
         bool loadingPreset = false;
+
+        void RefreshPreview()
+        {
+            if (monitorBox.SelectedIndex < 0 || presetBox.SelectedIndex < 0) return;
+            var screen = screens[monitorBox.SelectedIndex];
+            var preset = presets[presetBox.SelectedIndex];
+            var rows = customRows.TryGetValue(screen.DeviceName, out var savedRows)
+                ? LayoutPresets.NormalizeRows(savedRows) : LayoutPresets.NormalizeRows(null);
+
+            presetBox.Enabled = manageMonitor.Checked;
+            preview.Enabled = manageMonitor.Checked;
+            customPanel.Visible = preset == LayoutPreset.CustomColumns;
+            customPanel.Enabled = manageMonitor.Checked;
+            for (int column = 0; column < 3; column++)
+            {
+                rowCounts[column].Enabled = column < (int)columnCount.Value;
+                rowLabels[column].Enabled = column < (int)columnCount.Value;
+            }
+            preview.SetLayout(preset, screen.WorkingArea.Width, screen.WorkingArea.Height, rows);
+        }
+
+        void StoreCustomRows()
+        {
+            if (loadingPreset || monitorBox.SelectedIndex < 0) return;
+            string device = screens[monitorBox.SelectedIndex].DeviceName;
+            customRows[device] = rowCounts.Take((int)columnCount.Value)
+                .Select(control => (int)control.Value).ToArray();
+            RefreshPreview();
+        }
 
         monitorBox.SelectedIndexChanged += (_, _) =>
         {
             int index = monitorBox.SelectedIndex;
             if (index < 0) return;
-
             string device = screens[index].DeviceName;
-
-            var selected = layouts.TryGetValue(device, out var saved)
-                ? saved
-                : LayoutPreset.Grid2x2;
-
+            var selected = layouts.TryGetValue(device, out var saved) ? saved : LayoutPreset.Grid2x2;
             int presetIndex = Array.IndexOf(presets, selected);
+            var rows = customRows.TryGetValue(device, out var savedRows)
+                ? LayoutPresets.NormalizeRows(savedRows) : LayoutPresets.NormalizeRows(null);
 
             loadingPreset = true;
             presetBox.SelectedIndex = presetIndex >= 0 ? presetIndex : 0;
+            manageMonitor.Checked = !enabled.TryGetValue(device, out bool active) || active;
+            columnCount.Value = rows.Length;
+            for (int column = 0; column < 3; column++)
+                rowCounts[column].Value = column < rows.Length ? rows[column] : 1;
             loadingPreset = false;
-            preview.SetLayout(
-    presets[presetBox.SelectedIndex],
-    screens[index].WorkingArea.Width,
-    screens[index].WorkingArea.Height);
+            RefreshPreview();
         };
 
         presetBox.SelectedIndexChanged += (_, _) =>
         {
-            if (loadingPreset ||
-                monitorBox.SelectedIndex < 0 ||
-                presetBox.SelectedIndex < 0)
-                return;
-
+            if (loadingPreset || monitorBox.SelectedIndex < 0 || presetBox.SelectedIndex < 0) return;
             string device = screens[monitorBox.SelectedIndex].DeviceName;
             layouts[device] = presets[presetBox.SelectedIndex];
-            var screen = screens[monitorBox.SelectedIndex];
+            RefreshPreview();
+        };
 
-            preview.SetLayout(
-                presets[presetBox.SelectedIndex],
-                screen.WorkingArea.Width,
-                screen.WorkingArea.Height);
+        columnCount.ValueChanged += (_, _) => StoreCustomRows();
+        foreach (var control in rowCounts)
+            control.ValueChanged += (_, _) => StoreCustomRows();
+
+        manageMonitor.CheckedChanged += (_, _) =>
+        {
+            if (loadingPreset || monitorBox.SelectedIndex < 0) return;
+            string device = screens[monitorBox.SelectedIndex].DeviceName;
+            enabled[device] = manageMonitor.Checked;
+            RefreshPreview();
         };
 
         var note = new Label
         {
-            Text = "Önizlemedeki numaralar: Ctrl+Alt+1–9.\n" +
-       "Tek ekran modu: Ctrl+Alt+F12.",
-            Location = new Point(20, 560),
+            Text = "Özel düzende numaralar sütun sütun yukarıdan aşağıya ilerler.\n" +
+                   "Ctrl+Alt+1–9: Bölge. Kapalı ekranlar serbesttir; F12 genel mod anahtarıdır.",
+            Location = new Point(20, 590),
             Size = new Size(575, 55)
         };
 
         var save = new Button
         {
             Text = "Kaydet",
-            Location = new Point(485, 605),
+            Location = new Point(485, 645),
             Width = 110
         };
 
@@ -524,7 +681,9 @@ internal sealed class QuarterContext : ApplicationContext
                 SnapOnDrag = drag.Checked,
                 BrowserFullscreen = browser.Checked,
                 ExcludedProcesses = exclude.Text,
-                MonitorLayouts = layouts
+                MonitorLayouts = layouts,
+                MonitorEnabled = enabled,
+                MonitorCustomRows = customRows
             };
 
             try
@@ -541,8 +700,7 @@ internal sealed class QuarterContext : ApplicationContext
 
                 File.Move(optionsPath + ".tmp", optionsPath, true);
 
-                ReleaseAll();
-                options = next;
+                ApplyOptions(next);
                 form.Close();
             }
             catch (Exception ex)
@@ -554,8 +712,8 @@ internal sealed class QuarterContext : ApplicationContext
         form.Controls.AddRange(new Control[]
         {
         drag, browser, excludeLabel, exclude,
-        monitorLabel, monitorBox, presetLabel, presetBox,
-        preview, note, save
+        monitorLabel, monitorBox, manageMonitor, presetLabel, presetBox,
+        customPanel, preview, note, save
         });
 
         form.AcceptButton = save;
