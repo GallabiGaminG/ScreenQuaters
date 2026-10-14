@@ -22,6 +22,7 @@ internal sealed class Options
     public bool SnapOnDrag { get; set; } = false;
     public bool BrowserFullscreen { get; set; } = true;
     public Dictionary<string, LayoutPreset> MonitorLayouts { get; set; } = new();
+    public Dictionary<string, int[]> MonitorCustomRows { get; set; } = new();
     public Dictionary<string, bool> MonitorEnabled { get; set; } = new();
     public string ExcludedProcesses { get; set; } = "bandicam,obs64,explorer";
 }
@@ -174,11 +175,24 @@ internal sealed class QuarterContext : ApplicationContext
         return LayoutPreset.Grid2x2;
     }
 
+    static int[] GetCustomRows(nint monitorHandle, Options source)
+    {
+        string? device = Native.GetMonitorDeviceName(monitorHandle);
+        if (device is not null && source.MonitorCustomRows is not null)
+        {
+            foreach (var entry in source.MonitorCustomRows)
+                if (string.Equals(entry.Key, device, StringComparison.OrdinalIgnoreCase))
+                    return LayoutPresets.NormalizeRows(entry.Value);
+        }
+        return LayoutPresets.NormalizeRows(null);
+    }
+
     Native.Rect[] GetZones(nint monitorHandle)
     {
         var monitor = Native.MonitorInfo(monitorHandle);
         if (monitor is null) return Array.Empty<Native.Rect>();
-        return LayoutPresets.GetZones(monitor.Value.Work, GetPreset(monitorHandle, options));
+        return LayoutPresets.GetZones(monitor.Value.Work,
+            GetPreset(monitorHandle, options), GetCustomRows(monitorHandle, options));
     }
 
     void ApplyOptions(Options next)
@@ -201,7 +215,10 @@ internal sealed class QuarterContext : ApplicationContext
                 continue;
             }
 
-            if (GetPreset(current, previous) != GetPreset(current, next))
+            bool layoutChanged = GetPreset(current, previous) != GetPreset(current, next);
+            bool customChanged = GetPreset(current, next) == LayoutPreset.CustomColumns &&
+                !GetCustomRows(current, previous).SequenceEqual(GetCustomRows(current, next));
+            if (layoutChanged || customChanged)
             {
                 var zones = GetZones(current);
                 if (state.Zone >= zones.Length)
@@ -418,7 +435,7 @@ internal sealed class QuarterContext : ApplicationContext
             if (Fullscreen(hwnd, state))
             {
                 var m = Native.MonitorInfo(Native.MonitorFromWindow(hwnd, 2));
-                if (m is not null) { var r = m.Value.Bounds; Native.SetWindowPos(hwnd, 0, r.Left, r.Top, r.Right - r.Left, r.Bottom - r.Top, 0x14); }
+                if (m is not null) { var r = m.Value.Bounds; Native.SetWindowPos(hwnd, 0, r.Left, r.Top, r.Right-r.Left, r.Bottom-r.Top, 0x14); }
             }
             else { var original = state.Original; Native.SetWindowPlacement(hwnd, ref original); }
         }
@@ -512,6 +529,11 @@ internal sealed class QuarterContext : ApplicationContext
         var enabled = new Dictionary<string, bool>(
             options.MonitorEnabled ?? new(), StringComparer.OrdinalIgnoreCase);
 
+        var customRows = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
+        if (options.MonitorCustomRows is not null)
+            foreach (var entry in options.MonitorCustomRows)
+                customRows[entry.Key] = LayoutPresets.NormalizeRows(entry.Value);
+
         for (int index = 0; index < screens.Length; index++)
         {
             var screen = screens[index];
@@ -528,67 +550,119 @@ internal sealed class QuarterContext : ApplicationContext
 
         var preview = new LayoutPreview
         {
-            Location = new Point(20, 340),
-            Size = new Size(575, 235)
+            Location = new Point(20, 410),
+            Size = new Size(575, 165)
         };
 
+        var customPanel = new Panel
+        {
+            Location = new Point(20, 330),
+            Size = new Size(575, 70),
+            Visible = false
+        };
+        var columnCount = new NumericUpDown
+        {
+            Minimum = 1, Maximum = 3, Value = 3,
+            Location = new Point(0, 25), Width = 65
+        };
+        customPanel.Controls.Add(new Label
+        {
+            Text = "Sütun sayısı", Location = new Point(0, 0), AutoSize = true
+        });
+        customPanel.Controls.Add(columnCount);
+        var rowCounts = new NumericUpDown[3];
+        var rowLabels = new Label[3];
+        for (int column = 0; column < 3; column++)
+        {
+            int x = 125 + column * 140;
+            rowLabels[column] = new Label
+            {
+                Text = $"Sütun {column + 1}: Satır", Location = new Point(x, 0), AutoSize = true
+            };
+            rowCounts[column] = new NumericUpDown
+            {
+                Minimum = 1, Maximum = 3, Value = 1,
+                Location = new Point(x, 25), Width = 65
+            };
+            customPanel.Controls.Add(rowLabels[column]);
+            customPanel.Controls.Add(rowCounts[column]);
+        }
+
         bool loadingPreset = false;
+
+        void RefreshPreview()
+        {
+            if (monitorBox.SelectedIndex < 0 || presetBox.SelectedIndex < 0) return;
+            var screen = screens[monitorBox.SelectedIndex];
+            var preset = presets[presetBox.SelectedIndex];
+            var rows = customRows.TryGetValue(screen.DeviceName, out var savedRows)
+                ? LayoutPresets.NormalizeRows(savedRows) : LayoutPresets.NormalizeRows(null);
+
+            presetBox.Enabled = manageMonitor.Checked;
+            preview.Enabled = manageMonitor.Checked;
+            customPanel.Visible = preset == LayoutPreset.CustomColumns;
+            customPanel.Enabled = manageMonitor.Checked;
+            for (int column = 0; column < 3; column++)
+            {
+                rowCounts[column].Enabled = column < (int)columnCount.Value;
+                rowLabels[column].Enabled = column < (int)columnCount.Value;
+            }
+            preview.SetLayout(preset, screen.WorkingArea.Width, screen.WorkingArea.Height, rows);
+        }
+
+        void StoreCustomRows()
+        {
+            if (loadingPreset || monitorBox.SelectedIndex < 0) return;
+            string device = screens[monitorBox.SelectedIndex].DeviceName;
+            customRows[device] = rowCounts.Take((int)columnCount.Value)
+                .Select(control => (int)control.Value).ToArray();
+            RefreshPreview();
+        }
 
         monitorBox.SelectedIndexChanged += (_, _) =>
         {
             int index = monitorBox.SelectedIndex;
             if (index < 0) return;
-
             string device = screens[index].DeviceName;
-
-            var selected = layouts.TryGetValue(device, out var saved)
-                ? saved
-                : LayoutPreset.Grid2x2;
-
+            var selected = layouts.TryGetValue(device, out var saved) ? saved : LayoutPreset.Grid2x2;
             int presetIndex = Array.IndexOf(presets, selected);
+            var rows = customRows.TryGetValue(device, out var savedRows)
+                ? LayoutPresets.NormalizeRows(savedRows) : LayoutPresets.NormalizeRows(null);
 
             loadingPreset = true;
             presetBox.SelectedIndex = presetIndex >= 0 ? presetIndex : 0;
             manageMonitor.Checked = !enabled.TryGetValue(device, out bool active) || active;
-            presetBox.Enabled = manageMonitor.Checked;
-            preview.Enabled = manageMonitor.Checked;
+            columnCount.Value = rows.Length;
+            for (int column = 0; column < 3; column++)
+                rowCounts[column].Value = column < rows.Length ? rows[column] : 1;
             loadingPreset = false;
-            preview.SetLayout(
-    presets[presetBox.SelectedIndex],
-    screens[index].WorkingArea.Width,
-    screens[index].WorkingArea.Height);
+            RefreshPreview();
         };
 
         presetBox.SelectedIndexChanged += (_, _) =>
         {
-            if (loadingPreset ||
-                monitorBox.SelectedIndex < 0 ||
-                presetBox.SelectedIndex < 0)
-                return;
-
+            if (loadingPreset || monitorBox.SelectedIndex < 0 || presetBox.SelectedIndex < 0) return;
             string device = screens[monitorBox.SelectedIndex].DeviceName;
             layouts[device] = presets[presetBox.SelectedIndex];
-            var screen = screens[monitorBox.SelectedIndex];
-
-            preview.SetLayout(
-                presets[presetBox.SelectedIndex],
-                screen.WorkingArea.Width,
-                screen.WorkingArea.Height);
+            RefreshPreview();
         };
+
+        columnCount.ValueChanged += (_, _) => StoreCustomRows();
+        foreach (var control in rowCounts)
+            control.ValueChanged += (_, _) => StoreCustomRows();
 
         manageMonitor.CheckedChanged += (_, _) =>
         {
             if (loadingPreset || monitorBox.SelectedIndex < 0) return;
             string device = screens[monitorBox.SelectedIndex].DeviceName;
             enabled[device] = manageMonitor.Checked;
-            presetBox.Enabled = manageMonitor.Checked;
-            preview.Enabled = manageMonitor.Checked;
+            RefreshPreview();
         };
 
         var note = new Label
         {
-            Text = "Seçili ekran kapalıysa kısayollar ve sürükleme ona müdahale etmez.\n" +
-                   "Ctrl+Alt+1–9: Bölge. Ctrl+Alt+F12: Tüm ekranlarda çalışma / tek ekran.",
+            Text = "Özel düzende numaralar sütun sütun yukarıdan aşağıya ilerler.\n" +
+                   "Ctrl+Alt+1–9: Bölge. Kapalı ekranlar serbesttir; F12 genel mod anahtarıdır.",
             Location = new Point(20, 590),
             Size = new Size(575, 55)
         };
@@ -608,7 +682,8 @@ internal sealed class QuarterContext : ApplicationContext
                 BrowserFullscreen = browser.Checked,
                 ExcludedProcesses = exclude.Text,
                 MonitorLayouts = layouts,
-                MonitorEnabled = enabled
+                MonitorEnabled = enabled,
+                MonitorCustomRows = customRows
             };
 
             try
@@ -638,7 +713,7 @@ internal sealed class QuarterContext : ApplicationContext
         {
         drag, browser, excludeLabel, exclude,
         monitorLabel, monitorBox, manageMonitor, presetLabel, presetBox,
-        preview, note, save
+        customPanel, preview, note, save
         });
 
         form.AcceptButton = save;
